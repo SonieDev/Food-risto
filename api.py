@@ -124,10 +124,12 @@ app.add_middleware(
 class OrderItemCreate(BaseModel):
     product_id: int
     quantity: int
+    note:       str = ""
 
 class OrderCreate(BaseModel):
     table_number: int
     items: List[OrderItemCreate]
+    note: str = ""
 
 # 1. Endpoint per vedere i prodotti (Fa apparire il MENU sul sito)
 @app.get("/products")
@@ -149,8 +151,10 @@ def create_order(order: OrderCreate):
     cursor = conn.cursor()
     try:
         # Inserimento ordine base
-        cursor.execute("INSERT INTO orders (table_number, total, date) VALUES (%s, 0, CURRENT_TIMESTAMP) RETURNING id", 
-                       (order.table_number,))
+        cursor.execute("""
+            INSERT INTO order_items (order_id, product_id, quantity, price, note) 
+            VALUES (%s, %s, %s, %s, %s)
+        """, (order_id, item.product_id, item.quantity, price, item.note))
         order_id = cursor.fetchone()[0]
         
         total_order = 0
@@ -186,7 +190,7 @@ def get_orders():
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT o.id, o.table_number, p.name, oi.quantity, o.date
+            SELECT o.id, o.table_number, p.name, oi.quantity, o.date, oi.note
             FROM orders o
             JOIN order_items oi ON o.id = oi.order_id
             JOIN products p ON oi.product_id = p.id
@@ -198,10 +202,11 @@ def get_orders():
         for r in rows:
             result.append({
                 "order_id": r[0],
-                "table": r[1],
-                "product": r[2],
-                "qty": r[3],
-                "time": str(r[4]) # Semplificato per evitare altri errori
+                "table":    r[1],
+                "product":  r[2],
+                "qty":      r[3],
+                "time":     str(r[4]),
+                "note":     r[5] if r[5] else ""
             })
         
         return result # FastAPI capisce da solo che è un JSON
