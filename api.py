@@ -262,3 +262,63 @@ def toggle_product(product_id: int, available: bool):
     finally:
         cursor.close()
         conn.close()
+
+
+# nuovo endpoint dopo get_orders:
+@app.get("/stats/weekly")
+def get_weekly_stats():
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        # Incasso ultimi 7 giorni
+        cursor.execute("""
+            SELECT 
+                DATE(date) as day,
+                SUM(total) as revenue,
+                COUNT(*) as orders
+            FROM orders
+            WHERE date >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY DATE(date)
+            ORDER BY day ASC
+        """)
+        daily = cursor.fetchall()
+
+        # Prodotto più venduto
+        cursor.execute("""
+            SELECT 
+                p.name,
+                SUM(oi.quantity) as total_qty
+            FROM order_items oi
+            JOIN products p ON oi.product_id = p.id
+            JOIN orders o ON oi.order_id = o.id
+            WHERE o.date >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY p.name
+            ORDER BY total_qty DESC
+            LIMIT 5
+        """)
+        top_products = cursor.fetchall()
+
+        # Ora di punta
+        cursor.execute("""
+            SELECT 
+                EXTRACT(HOUR FROM date) as hour,
+                COUNT(*) as orders
+            FROM orders
+            WHERE date >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY hour
+            ORDER BY orders DESC
+            LIMIT 1
+        """)
+        peak_hour = cursor.fetchone()
+
+        return {
+            "daily":        [{"day": str(r[0]), "revenue": float(r[1]), "orders": r[2]} for r in daily],
+            "top_products": [{"name": r[0], "qty": r[1]} for r in top_products],
+            "peak_hour":    int(peak_hour[0]) if peak_hour else None
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
