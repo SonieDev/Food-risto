@@ -137,9 +137,21 @@ def get_products():
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, name, price, category FROM products;")
+        cursor.execute("""
+            SELECT id, name, price, category, available 
+            FROM products
+        """)
         rows = cursor.fetchall()
-        return [{"id": r[0], "name": r[1], "price": float(r[2]), "category": r[3]} for r in rows]
+        return [
+            {
+                "id":        r[0],
+                "name":      r[1],
+                "price":     float(r[2]),
+                "category":  r[3],
+                "available": r[4] if r[4] is not None else True
+            }
+            for r in rows
+        ]
     finally:
         cursor.close()
         conn.close()
@@ -229,6 +241,24 @@ def get_orders():
     except Exception as e:
         print(f"Errore: {e}")
         return {"error": str(e)}
+    finally:
+        cursor.close()
+        conn.close()
+
+#nuovo endpoint dopo get_products
+@app.patch("/products/{product_id}/available")
+def toggle_product(product_id: int, available: bool):
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            UPDATE products SET available = %s WHERE id = %s
+        """, (available, product_id))
+        conn.commit()
+        return {"status": "success", "product_id": product_id, "available": available}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
         conn.close()
