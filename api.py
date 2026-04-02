@@ -150,33 +150,49 @@ def create_order(order: OrderCreate):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        # Inserimento ordine base
+        # 1️⃣ Prima crea l'ordine e ottieni l'id
         cursor.execute("""
-            INSERT INTO order_items (order_id, product_id, quantity, price, note) 
-            VALUES (%s, %s, %s, %s, %s)
-        """, (order_id, item.product_id, item.quantity, price, item.note))
+            INSERT INTO orders (table_number, total, date) 
+            VALUES (%s, 0, CURRENT_TIMESTAMP) 
+            RETURNING id
+        """, (order.table_number,))
         order_id = cursor.fetchone()[0]
-        
+
         total_order = 0
+
+        # 2️⃣ Poi inserisci ogni prodotto
         for item in order.items:
-            # Recupero prezzo aggiornato dal DB
-            cursor.execute("SELECT price FROM products WHERE id=%s", (item.product_id,))
+            cursor.execute(
+                "SELECT price FROM products WHERE id=%s",
+                (item.product_id,)
+            )
             res = cursor.fetchone()
-            if not res: continue
-            
-            price = float(res[0])
+            if not res:
+                continue
+
+            price    = float(res[0])
             subtotal = price * item.quantity
             total_order += subtotal
-            
+
             cursor.execute("""
-                INSERT INTO order_items (order_id, product_id, quantity, price) 
-                VALUES (%s, %s, %s, %s)
-            """, (order_id, item.product_id, item.quantity, price))
-            
-        # Aggiorno il totale reale
-        cursor.execute("UPDATE orders SET total=%s WHERE id=%s", (total_order, order_id))
+                INSERT INTO order_items 
+                (order_id, product_id, quantity, price, note) 
+                VALUES (%s, %s, %s, %s, %s)
+            """, (order_id, item.product_id, item.quantity, price, item.note))
+
+        # 3️⃣ Aggiorna il totale
+        cursor.execute(
+            "UPDATE orders SET total=%s WHERE id=%s",
+            (total_order, order_id)
+        )
+
         conn.commit()
-        return {"status": "success", "order_id": order_id, "total": total_order}
+        return {
+            "status":   "success",
+            "order_id": order_id,
+            "total":    total_order
+        }
+
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
