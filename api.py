@@ -101,63 +101,126 @@ def create_order(order: OrderCreate):
     '''
 
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import List
 import psycopg2
 from database_pg import get_connection
 from jose import jwt
 from datetime import datetime, timedelta
+from collections import defaultdict
+import time
 import os
 
 app = FastAPI()
 
-# Configurazione CORS: Fondamentale per far parlare il sito con il database
+# ══════════════════════════════════════════
+# CORS
+# ══════════════════════════════════════════
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],   # puoi mettere il tuo dominio Netlify qui
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-SECRET_KEY = os.getenv("SECRET_KEY", "cambia-questa-chiave")
-
-USERS = {
-    "admin":  {"password": os.getenv("ADMIN_PASSWORD",  "admin123"),  "role": "admin"},
-    "staff":  {"password": os.getenv("STAFF_PASSWORD",  "staff123"),  "role": "cucina"},
-}
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-@app.post("/login")
-def login(data: LoginRequest):
-    user = USERS.get(data.username)
-    if not user or user["password"] != data.password:
-        raise HTTPException(status_code=401, detail="Credenziali errate")
-    token = jwt.encode(
-        {"sub": data.username, "role": user["role"], "exp": datetime.utcnow() + timedelta(hours=8)},
-        SECRET_KEY, algorithm="HS256"
-    )
-    return {"token": token, "role": user["role"]}
-
-
-
-# Modelli per la validazione dati (Risolve l'errore 422)
+# ══════════════════════════════════════════
+# MODELLI ORDINE
+# ══════════════════════════════════════════
 class OrderItemCreate(BaseModel):
     product_id: int
     quantity: int
-    note:       str = ""
+    note: str = ""
 
 class OrderCreate(BaseModel):
     table_number: int
     items: List[OrderItemCreate]
     note: str = ""
 
-# 1. Endpoint per vedere i prodotti (Fa apparire il MENU sul sito)
+# ══════════════════════════════════════════
+# CONFIG JWT + UTENTI
+# ══════════════════════════════════════════
+SECRET_KEY = os.getenv("SECRET_KEY", "cambia-questa-chiave")
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+STAFF_PASSWORD = os.getenv("STAFF_PASSWORD")
+
+if not ADMIN_PASSWORD or not STAFF_PASSWORD:
+    raise RuntimeError("❌ ADMIN_PASSWORD e STAFF_PASSWORD devono essere impostate su Railway!")
+
+USERS = {
+    "admin": {"password": ADMIN_PASSWORD, "role": "admin"},
+    "staff": {"password": STAFF_PASSWORD, "role": "cucina"},
+}
+
+# ══════════════════════════════════════════
+# ANTI BRUTE FORCE
+# ══════════════════════════════════════════
+login_attempts = defaultdict(list)
+
+def is_blocked(ip: str) -> bool:
+    now = time.time()
+    # Mantieni solo tentativi degli ultimi 5 minuti
+    login_attempts[ip] = [t for t in login_attempts[ip] if now - t < 300]
+    # Blocca dopo 5 tentativi falliti
+    return len(login_attempts[ip]) >= 5
+
+# ══════════════════════════════════════════
+# VERIFICA TOKEN
+# ══════════════════════════════════════════
+security = HTTPBearer()
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=["HS256"])
+        return payload
+    except:
+        raise HTTPException(status_code=401, detail="Token non valido o scaduto")
+
+# ══════════════════════════════════════════
+# MODELLO LOGIN
+# ══════════════════════════════════════════
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+# ══════════════════════════════════════════
+# ENDPOINT LOGIN
+# ══════════════════════════════════════════
+@app.post("/login")
+def login(data: LoginRequest, request: Request):
+    ip = request.client.host
+
+    # Controlla se IP è bloccato
+    if is_blocked(ip):
+        raise HTTPException(status_code=429, detail="Troppi tentativi. Aspetta 5 minuti.")
+
+    user = USERS.get(data.username)
+    if not user or user["password"] != data.password:
+        # Registra tentativo fallito
+        login_attempts[ip].append(time.time())
+        raise HTTPException(status_code=401, detail="Credenziali errate")
+
+    # Login ok → resetta tentativi
+    login_attempts[ip] = []
+
+    token = jwt.encode(
+        {
+            "sub": data.username,
+            "role": user["role"],
+            "exp": datetime.utcnow() + timedelta(hours=8)
+        },
+        SECRET_KEY,
+        algorithm="HS256"
+    )
+    return {"token": token, "role": user["role"]}
+
+# ══════════════════════════════════════════
+# GET PRODOTTI — pubblico (serve al menu clienti)
+# ══════════════════════════════════════════
 @app.get("/products")
 def get_products():
     conn = get_connection()
@@ -182,7 +245,9 @@ def get_products():
         cursor.close()
         conn.close()
 
-# 2. Endpoint per salvare l'ordine (Logica Seria)
+# ══════════════════════════════════════════
+# POST ORDINE — pubblico (clienti ordinano)
+# ══════════════════════════════════════════
 @app.post("/orders")
 def create_order(order: OrderCreate):
     conn = get_connection()
@@ -207,18 +272,18 @@ def create_order(order: OrderCreate):
             res = cursor.fetchone()
             if not res:
                 continue
-
+            
             price    = float(res[0])
             subtotal = price * item.quantity
             total_order += subtotal
 
+            # 3️⃣ Aggiorna il totale
             cursor.execute("""
                 INSERT INTO order_items 
                 (order_id, product_id, quantity, price, note) 
                 VALUES (%s, %s, %s, %s, %s)
             """, (order_id, item.product_id, item.quantity, price, item.note))
 
-        # 3️⃣ Aggiorna il totale
         cursor.execute(
             "UPDATE orders SET total=%s WHERE id=%s",
             (total_order, order_id)
@@ -238,8 +303,11 @@ def create_order(order: OrderCreate):
         cursor.close()
         conn.close()
 
+# ══════════════════════════════════════════
+# GET ORDINI — protetto (solo staff e admin)
+# ══════════════════════════════════════════
 @app.get("/orders")
-def get_orders():
+def get_orders(token = Depends(verify_token)):
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -251,7 +319,7 @@ def get_orders():
             ORDER BY o.date DESC
         """)
         rows = cursor.fetchall()
-        
+
         result = []
         for r in rows:
             result.append({
@@ -262,8 +330,8 @@ def get_orders():
                 "time":     str(r[4]),
                 "note":     r[5] if r[5] else ""
             })
-        
-        return result # FastAPI capisce da solo che è un JSON
+
+        return result
     except Exception as e:
         print(f"Errore: {e}")
         return {"error": str(e)}
@@ -271,9 +339,11 @@ def get_orders():
         cursor.close()
         conn.close()
 
-#nuovo endpoint dopo get_products
+# ══════════════════════════════════════════
+# TOGGLE PRODOTTO — protetto (solo admin)
+# ══════════════════════════════════════════
 @app.patch("/products/{product_id}/available")
-def toggle_product(product_id: int, available: bool):
+def toggle_product(product_id: int, available: bool, token = Depends(verify_token)):
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -289,10 +359,11 @@ def toggle_product(product_id: int, available: bool):
         cursor.close()
         conn.close()
 
-
-# nuovo endpoint dopo get_orders:
+# ══════════════════════════════════════════
+# STATS SETTIMANALI — protetto (solo admin)
+# ══════════════════════════════════════════
 @app.get("/stats/weekly")
-def get_weekly_stats():
+def get_weekly_stats(token = Depends(verify_token)):
     conn = get_connection()
     cursor = conn.cursor()
     try:
@@ -323,6 +394,7 @@ def get_weekly_stats():
             LIMIT 5
         """)
         top_products = cursor.fetchall()
+
 
         # Ora di punta
         cursor.execute("""
