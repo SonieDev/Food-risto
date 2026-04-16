@@ -108,7 +108,32 @@ from pydantic import BaseModel
 from typing import List
 import psycopg2
 from database_pg import get_connection
-from fastapi.middleware.cors import CORSMiddleware
+from jose import jwt
+from datetime import datetime, timedelta
+import os
+
+SECRET_KEY = os.getenv("SECRET_KEY", "cambia-questa-chiave")
+
+USERS = {
+    "admin":  {"password": os.getenv("ADMIN_PASSWORD",  "admin123"),  "role": "admin"},
+    "staff":  {"password": os.getenv("STAFF_PASSWORD",  "staff123"),  "role": "cucina"},
+}
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@app.post("/login")
+def login(data: LoginRequest):
+    user = USERS.get(data.username)
+    if not user or user["password"] != data.password:
+        raise HTTPException(status_code=401, detail="Credenziali errate")
+    token = jwt.encode(
+        {"sub": data.username, "role": user["role"], "exp": datetime.utcnow() + timedelta(hours=8)},
+        SECRET_KEY, algorithm="HS256"
+    )
+    return {"token": token, "role": user["role"]}
+
 
 app = FastAPI()
 
