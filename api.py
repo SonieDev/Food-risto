@@ -112,6 +112,16 @@ from jose import jwt
 from datetime import datetime, timedelta
 import os
 
+app = FastAPI()
+
+# Configurazione CORS: Fondamentale per far parlare il sito con il database
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 SECRET_KEY = os.getenv("SECRET_KEY", "cambia-questa-chiave")
 
 USERS = {
@@ -135,15 +145,6 @@ def login(data: LoginRequest):
     return {"token": token, "role": user["role"]}
 
 
-app = FastAPI()
-
-# Configurazione CORS: Fondamentale per far parlare il sito con il database
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Modelli per la validazione dati (Risolve l'errore 422)
 class OrderItemCreate(BaseModel):
