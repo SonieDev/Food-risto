@@ -110,7 +110,7 @@ from typing import List
 import psycopg2
 from database_pg import get_connection
 from jose import jwt
-from datetime import datetime, timedelta
+from datetime import datetime,timezone, timedelta
 from collections import defaultdict
 import time
 import os
@@ -211,7 +211,7 @@ def login(data: LoginRequest, request: Request):
         {
             "sub": data.username,
             "role": user["role"],
-            "exp": datetime.utcnow() + timedelta(hours=8)
+            "exp": datetime.now(timezone.utc) + timedelta(hours=2)
         },
         SECRET_KEY,
         algorithm="HS256"
