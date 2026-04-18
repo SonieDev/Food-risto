@@ -110,8 +110,9 @@ from typing import List
 import psycopg2
 from database_pg import get_connection
 from jose import jwt
-from datetime import datetime,timezone, timedelta
+from datetime import datetime, timedelta
 from collections import defaultdict
+import anthropic
 import time
 import os
 
@@ -211,7 +212,7 @@ def login(data: LoginRequest, request: Request):
         {
             "sub": data.username,
             "role": user["role"],
-            "exp": datetime.now(timezone.utc) + timedelta(hours=2)
+            "exp": datetime.utcnow() + timedelta(hours=2)
         },
         SECRET_KEY,
         algorithm="HS256"
@@ -253,7 +254,6 @@ def create_order(order: OrderCreate):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        # 1️⃣ Prima crea l'ordine e ottieni l'id
         cursor.execute("""
             INSERT INTO orders (table_number, total, date) 
             VALUES (%s, 0, CURRENT_TIMESTAMP) 
@@ -263,7 +263,6 @@ def create_order(order: OrderCreate):
 
         total_order = 0
 
-        # 2️⃣ Poi inserisci ogni prodotto
         for item in order.items:
             cursor.execute(
                 "SELECT price FROM products WHERE id=%s",
@@ -272,12 +271,11 @@ def create_order(order: OrderCreate):
             res = cursor.fetchone()
             if not res:
                 continue
-            
+
             price    = float(res[0])
             subtotal = price * item.quantity
             total_order += subtotal
 
-            # 3️⃣ Aggiorna il totale
             cursor.execute("""
                 INSERT INTO order_items 
                 (order_id, product_id, quantity, price, note) 
@@ -367,7 +365,6 @@ def get_weekly_stats(token = Depends(verify_token)):
     conn = get_connection()
     cursor = conn.cursor()
     try:
-        # Incasso ultimi 7 giorni
         cursor.execute("""
             SELECT 
                 DATE(date) as day,
@@ -380,7 +377,6 @@ def get_weekly_stats(token = Depends(verify_token)):
         """)
         daily = cursor.fetchall()
 
-        # Prodotto più venduto
         cursor.execute("""
             SELECT 
                 p.name,
@@ -395,8 +391,6 @@ def get_weekly_stats(token = Depends(verify_token)):
         """)
         top_products = cursor.fetchall()
 
-
-        # Ora di punta
         cursor.execute("""
             SELECT 
                 EXTRACT(HOUR FROM date) as hour,
@@ -420,3 +414,47 @@ def get_weekly_stats(token = Depends(verify_token)):
     finally:
         cursor.close()
         conn.close()
+
+# ══════════════════════════════════════════
+# CHAT IA — Config
+# ══════════════════════════════════════════
+ai_client = anthropic.Anthropic(
+    api_key=os.getenv("ANTHROPIC_API_KEY")
+)
+
+SYSTEM_PROMPT = """Sei l'assistente virtuale del ristorante STEVIA, un ristorante premium specializzato in hamburger gourmet e grigliate.
+
+INFORMAZIONI:
+- Orari: Lunedì-Domenica 12:00-15:00 e 19:00-23:30
+- Prenotazioni: +39 02 1234567
+
+MENU:
+🍔 HAMBURGER: Smach 12€, Dakota 9€, American 10€, Louisiana 11€, BBQ 12€
+🔥 GRIGLIATE: Pollo 12€, Gallo 14€, Chicken Creek 15€, Buffalo 16€, Ribs 18€, Barbecue mix 20€
+🍟 SFIZIOSITÀ: Nuggets 6€, Wings 12€, French fries 4€
+🥤 BEVANDE: Caffè/Tè/Coca/Sprite 2.50€, Succo 3€, Liquori 5€
+
+Rispondi sempre in italiano, sii amichevole e consiglia i piatti con entusiasmo."""
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    messages: List[Message]
+
+# ══════════════════════════════════════════
+# ENDPOINT CHAT IA — pubblico (clienti)
+# ══════════════════════════════════════════
+@app.post("/chat")
+def chat(req: ChatRequest):
+    try:
+        response = ai_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": m.role, "content": m.content} for m in req.messages]
+        )
+        return {"reply": response.content[0].text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
