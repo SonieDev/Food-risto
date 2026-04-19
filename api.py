@@ -463,7 +463,7 @@ def chat(req: ChatRequest):
         return {"reply": response.content[0].text}
     except Exception as e:
         error_msg = f"{type(e).__name__}: {str(e)}"  
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @app.get("/")
