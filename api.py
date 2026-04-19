@@ -462,6 +462,7 @@ def chat(req: ChatRequest):
         )
         return {"reply": response.content[0].text}
     except Exception as e:
+        print(f"ERRORE CHAT: {type(e).__name__}: {str(e)}")  
         raise HTTPException(status_code=500, detail=str(e))
 
 
