@@ -422,6 +422,11 @@ ai_client = anthropic.Anthropic(
     api_key=os.getenv("ANTHROPIC_API_KEY")
 )
 
+# Controllo chiave
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY")
+if not ANTHROPIC_KEY:
+    raise RuntimeError("❌ ANTHROPIC_API_KEY non trovata!")
+
 SYSTEM_PROMPT = """Sei l'assistente virtuale del ristorante STEVIA, un ristorante premium specializzato in hamburger gourmet e grigliate.
 
 INFORMAZIONI:
